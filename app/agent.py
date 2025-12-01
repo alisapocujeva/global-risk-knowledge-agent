@@ -35,11 +35,16 @@ def get_perplexity_api_key() -> str:
     key = os.getenv("PERPLEXITY_API_KEY")
     if not key or key.strip() == "":
         raise RuntimeError(
-            "PERPLEXITY_API_KEY environment variable is not set.\n"
-            "Options:\n"
-            "1. Create a .env file in the project root with: PERPLEXITY_API_KEY=your_key_here\n"
-            "2. Set environment variable: $env:PERPLEXITY_API_KEY='your_key_here' (PowerShell)\n"
-            "3. Get your API key from https://www.perplexity.ai/settings/api"
+            "PERPLEXITY_API_KEY environment variable is not set.\n\n"
+            "For Streamlit Cloud:\n"
+            "1. Go to your app on https://share.streamlit.io\n"
+            "2. Click 'Manage app' → 'Settings' → 'Secrets'\n"
+            "3. Add: PERPLEXITY_API_KEY = 'your_key_here'\n"
+            "4. Save and restart the app\n\n"
+            "For local/Docker:\n"
+            "1. Create a .env file with: PERPLEXITY_API_KEY=your_key_here\n"
+            "2. Or set: $env:PERPLEXITY_API_KEY='your_key_here' (PowerShell)\n\n"
+            "Get your API key from: https://www.perplexity.ai/settings/api"
         )
     return key.strip()
 
