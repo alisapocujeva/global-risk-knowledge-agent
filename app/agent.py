@@ -16,7 +16,7 @@ from collections import defaultdict
 from typing import List, Dict, Any, Tuple, Optional
 
 import requests
-from chromadb import PersistentClient
+from chromadb import PersistentClient, Client
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
@@ -46,7 +46,34 @@ def get_perplexity_api_key() -> str:
 PPLX_URL = "https://api.perplexity.ai/chat/completions"
 PPLX_MODEL = "sonar-pro"  # Fixed to sonar-pro
 
-INDEX_DIR = "/app/index"
+# Use /tmp for Streamlit Cloud (read-only filesystem except /tmp)
+# Try /app/index first (Docker/local), fallback to /tmp (Streamlit Cloud)
+def get_index_dir():
+    """Get the index directory, using /tmp on Streamlit Cloud."""
+    # Check if we're on Streamlit Cloud
+    is_streamlit_cloud = (
+        os.environ.get("STREAMLIT_SHARING_MODE") == "true" or
+        os.environ.get("STREAMLIT_SERVER_PORT") is not None or
+        os.path.exists("/mount/src")  # Streamlit Cloud mount point
+    )
+    
+    if is_streamlit_cloud:
+        # Streamlit Cloud - use /tmp (writable)
+        index_dir = "/tmp/chromadb_index"
+        os.makedirs(index_dir, exist_ok=True)
+        return index_dir
+    else:
+        # Docker/local - use /app/index
+        try:
+            os.makedirs("/app/index", exist_ok=True)
+            return "/app/index"
+        except (OSError, PermissionError):
+            # Fallback to /tmp if /app/index is not writable
+            index_dir = "/tmp/chromadb_index"
+            os.makedirs(index_dir, exist_ok=True)
+            return index_dir
+
+INDEX_DIR = get_index_dir()
 COLLECTION = "risk_docs"
 
 # Lazy initialization of embedding model to avoid import-time errors
@@ -660,8 +687,14 @@ class RiskIntelligenceAgent:
     """Global Risk Knowledge Agent for Civil Engineering."""
     
     def __init__(self):
-        self.client = PersistentClient(path=INDEX_DIR)
-        self.collection = self.client.get_or_create_collection(COLLECTION)
+        # Use PersistentClient with /tmp on Streamlit Cloud, /app/index on Docker/local
+        try:
+            self.client = PersistentClient(path=INDEX_DIR)
+            self.collection = self.client.get_or_create_collection(COLLECTION)
+        except Exception as e:
+            # Fallback to in-memory client if persistent storage fails
+            self.client = Client()
+            self.collection = self.client.get_or_create_collection(COLLECTION)
         try:
             self.research_engine = ResearchSearchEngine(timeout=15)
         except Exception as e:
