@@ -6,4 +6,5 @@ pypdf
 pandas
 numpy
 python-dotenv
-xhtml2pdf
+# xhtml2pdf removed - requires system Cairo library not available in Streamlit Cloud
+# PDF generation is optional and handled gracefully in app.py
