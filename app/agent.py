@@ -918,6 +918,8 @@ class RiskIntelligenceAgent:
                             citations = (
                                 data.get("citations_list") or 
                                 data.get("sources") or
+                                data.get("references") or
+                                data.get("source_attributions") or
                                 []
                             )
                         
@@ -926,8 +928,24 @@ class RiskIntelligenceAgent:
                             choice = data["choices"][0]
                             if "citations" in choice:
                                 citations = choice["citations"] if isinstance(choice["citations"], list) else []
+                            # Also check message metadata
+                            if "message" in choice and isinstance(choice["message"], dict):
+                                msg = choice["message"]
+                                if "citations" in msg:
+                                    citations = msg["citations"] if isinstance(msg["citations"], list) else []
+                                if not citations and "source_attributions" in msg:
+                                    citations = msg["source_attributions"] if isinstance(msg["source_attributions"], list) else []
                         
-                        # Extract citations (silent if none found)
+                        # Check if citations are in response metadata
+                        if not citations and "response" in data:
+                            resp = data["response"]
+                            if isinstance(resp, dict):
+                                citations = (
+                                    resp.get("citations") or
+                                    resp.get("sources") or
+                                    resp.get("references") or
+                                    []
+                                )
                         
                         return content, citations
                     except (KeyError, ValueError) as e:
@@ -1087,25 +1105,48 @@ class RiskIntelligenceAgent:
                 response = self._enhance_with_citations(response, url_citations)
         
         # Step 5: Merge research sources into reference list
+        # ALWAYS merge academic sources, even if Perplexity generated references
         existing_refs = self._extract_reference_section(response)
         
-        # If no reference section exists, create one from research sources
-        if not existing_refs and research_sources:
+        # Merge all available sources: Perplexity citations + academic API sources
+        all_available_refs = existing_refs.copy() if existing_refs else []
+        
+        # Add academic sources (always merge, even if Perplexity has references)
+        if research_sources:
+            all_available_refs = self._merge_references(all_available_refs, research_sources)
+        
+        # If no reference section exists, create one
+        if not existing_refs:
             if not response.endswith("\n"):
                 response += "\n"
             response += "\n## FULL REFERENCE LIST\n\n"
-            for i, ref in enumerate(research_sources[:80], start=1):
-                if not ref.startswith("["):
-                    ref = f"[{i}] {ref}"
-                response += f"{ref}\n"
-        elif research_sources:
-            all_refs = self._merge_references(existing_refs, research_sources)
-            response = self._replace_reference_section(response, all_refs)
         
-        # Ensure we have at least 50 sources
+        # Replace or add reference section with merged references
+        if all_available_refs:
+            response = self._replace_reference_section(response, all_available_refs)
+        
+        # Ensure we have at least 50 sources - if still below, add more from research_sources
         ref_list = self._extract_reference_section(response)
         if len(ref_list) < 50 and research_sources:
-            additional_refs = research_sources[len(ref_list):50]
+            # Get more sources from research_sources that weren't already added
+            existing_urls = set()
+            for ref in ref_list:
+                url_match = re.search(r'https?://[^\s\)]+', ref)
+                if url_match:
+                    existing_urls.add(url_match.group(0).lower().rstrip('/'))
+            
+            # Add additional sources that aren't duplicates
+            additional_refs = []
+            for ref in research_sources:
+                url_match = re.search(r'https?://[^\s\)]+', ref)
+                if url_match:
+                    url = url_match.group(0).lower().rstrip('/')
+                    if url not in existing_urls:
+                        additional_refs.append(ref)
+                        existing_urls.add(url)
+                        if len(ref_list) + len(additional_refs) >= 50:
+                            break
+            
             if additional_refs:
                 all_refs = self._merge_references(ref_list, additional_refs)
                 response = self._replace_reference_section(response, all_refs)
@@ -1190,12 +1231,14 @@ class RiskIntelligenceAgent:
             if expanded_citations:
                 expanded_response = self._enhance_with_citations(expanded_response, expanded_citations)
             
-            # Merge reference lists
+            # Merge reference lists: primary + expanded + research sources
             primary_refs = self._extract_reference_section(response)
             expanded_refs = self._extract_reference_section(expanded_response)
+            
+            # Merge all sources together
             all_refs = self._merge_references(primary_refs, expanded_refs)
             
-            # Add research sources
+            # ALWAYS add research sources (academic APIs) - they should always be included
             if research_sources:
                 all_refs = self._merge_references(all_refs, research_sources)
             
@@ -1316,12 +1359,40 @@ class RiskIntelligenceAgent:
                 except:
                     pass
             
-            # Filter source for relevance (relaxed - allow high-quality sources)
+            # Filter source for relevance (relaxed for citations - allow DOIs, journal sites, engineering publishers)
             if url or title:
                 abstract = ""  # Citations may not have abstracts
-                is_valid, reason = filter_source(url or "http://example.com", title, abstract)
-                if not is_valid:
-                    continue  # Skip excluded sources
+                # For citations, use relaxed filtering - allow DOIs, journal sites, engineering publishers
+                # Only exclude hard exclusions (Wikipedia, blogs, social media)
+                url_lower = (url or "").lower()
+                title_lower = (title or "").lower()
+                
+                # Hard exclusions: Wikipedia, blogs, social media
+                excluded_domains = ["wikipedia.org", "wikimedia.org", "blogspot.com", "wordpress.com", 
+                                   "medium.com", "tumblr.com", "reddit.com", "quora.com", 
+                                   "facebook.com", "twitter.com", "linkedin.com", "youtube.com"]
+                if any(excluded in url_lower for excluded in excluded_domains):
+                    continue  # Skip hard exclusions
+                
+                # Allow DOIs, journal sites, engineering publishers even without abstract
+                is_doi = "doi.org" in url_lower or "/10." in url_lower
+                is_journal = any(j in url_lower for j in [".org", ".edu", ".gov", "sciencedirect", "springer", 
+                                                          "ieee", "acm", "asce", "ice.org", "pianc", "usace"])
+                is_engineering_publisher = any(ep in url_lower for ep in ["asce.org", "ice.org.uk", "sciencedirect.com",
+                                                                          "springer.com", "arxiv.org", "usace.army.mil",
+                                                                          "pianc.org", "ita-aites.org", "researchgate.net"])
+                
+                # If it's a DOI, journal, or engineering publisher, accept it
+                if is_doi or is_journal or is_engineering_publisher:
+                    pass  # Accept
+                else:
+                    # For other sources, check basic engineering relevance
+                    combined_text = f"{title_lower} {url_lower}".lower()
+                    engineering_keywords = ["engineering", "construction", "infrastructure", "project", 
+                                           "structural", "geotechnical", "marine", "coastal", "tunnel",
+                                           "harbor", "harbour", "bridge", "foundation", "risk"]
+                    if not any(kw in combined_text for kw in engineering_keywords):
+                        continue  # Skip non-engineering sources
             
             # Skip duplicates and empty entries
             if url:
@@ -1873,22 +1944,47 @@ Focus on how external sources relate to or validate these internal lessons."""
                     output.append(line)
                 report = "\n".join(output)
         
-        # Test 2: References - extract URLs if < 50
+        # Test 2: References - ensure we have at least 50 references
         ref_list = self._extract_reference_section(report)
         if len(ref_list) < 50:
+            # Extract URLs from entire report
             urls = re.findall(r'https?://[^\s\)]+', report)
             if urls:
-                existing_urls = {ref.split("—")[-1].strip() for ref in ref_list if "—" in ref}
+                # Get existing URLs from reference list
+                existing_urls = set()
+                for ref in ref_list:
+                    url_match = re.search(r'https?://[^\s\)]+', ref)
+                    if url_match:
+                        existing_urls.add(url_match.group(0).lower().rstrip('/'))
+                
+                # Add new references from URLs found in report
                 new_refs = []
-                for url in urls[:50]:
-                    if url not in existing_urls:
-                        new_refs.append(f"[{len(ref_list) + len(new_refs) + 1}] Source — {url}")
-                        existing_urls.add(url)
+                for url in urls:
+                    url_normalized = url.lower().rstrip('/')
+                    if url_normalized not in existing_urls:
+                        # Try to extract title from surrounding text
+                        url_pattern = re.escape(url)
+                        title_match = re.search(rf'([^\[\]]+?)\s*{url_pattern}', report, re.IGNORECASE)
+                        title = title_match.group(1).strip()[:100] if title_match else f"Source {len(ref_list) + len(new_refs) + 1}"
+                        # Clean title
+                        title = re.sub(r'^\[.*?\]\s*', '', title).strip()
+                        if not title or len(title) < 3:
+                            title = f"Source {len(ref_list) + len(new_refs) + 1}"
+                        new_refs.append(f"[{len(ref_list) + len(new_refs) + 1}] {title} — {url}")
+                        existing_urls.add(url_normalized)
+                        if len(ref_list) + len(new_refs) >= 50:
+                            break
+                
                 if new_refs:
+                    # Merge with existing references
+                    all_refs = self._merge_references(ref_list, new_refs)
                     if "FULL REFERENCE LIST" in report.upper():
-                        report = report + "\n" + "\n".join(new_refs)
+                        report = self._replace_reference_section(report, all_refs)
                     else:
-                        report = report + "\n\n## FULL REFERENCE LIST\n\n" + "\n".join(new_refs)
+                        if not report.endswith("\n"):
+                            report += "\n"
+                        report += "\n## FULL REFERENCE LIST\n\n"
+                        report += "\n".join(all_refs)
         
         return report
 

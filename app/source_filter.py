@@ -399,12 +399,18 @@ def filter_source(url: str, title: str, abstract: str = "", allow_wikipedia: boo
     if not is_relevant:
         return False, f"Not engineering-relevant: {reason}"
     
-    # STRICT: Require meaningful abstract/summary (unless from high-quality engineering academic source)
+    # Require meaningful abstract/summary (unless from high-quality engineering academic source, DOI, or journal site)
     if not abstract or len(abstract.strip()) < 20:
-        # Allow if from engineering academic domain
         url_lower = url.lower()
+        # Allow if from engineering academic domain
         is_engineering_academic = any(eng_domain in url_lower for eng_domain in ENGINEERING_ACADEMIC_DOMAINS)
-        if not is_engineering_academic:
+        # Allow DOIs (doi.org or /10. pattern)
+        is_doi = "doi.org" in url_lower or "/10." in url_lower
+        # Allow journal sites
+        is_journal = any(j in url_lower for j in [".org", ".edu", ".gov", "sciencedirect", "springer", 
+                                                  "ieee", "acm", "asce", "ice.org", "pianc", "usace",
+                                                  "researchgate", "arxiv"])
+        if not (is_engineering_academic or is_doi or is_journal):
             return False, "Missing meaningful abstract/summary"
     
     return True, "Valid"
