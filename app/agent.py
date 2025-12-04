@@ -904,7 +904,15 @@ class RiskIntelligenceAgent:
                 if response.status_code == 200:
                     try:
                         data = response.json()
-                        content = data["choices"][0]["message"]["content"]
+                        # Safely access choices and message
+                        if "choices" not in data or len(data["choices"]) == 0:
+                            raise RuntimeError("Perplexity API returned no choices in response")
+                        choice = data["choices"][0]
+                        if "message" not in choice:
+                            raise RuntimeError("Perplexity API response missing 'message' field")
+                        if "content" not in choice["message"]:
+                            raise RuntimeError("Perplexity API response missing 'content' field")
+                        content = choice["message"]["content"]
                         
                         # Extract citations if available (check multiple possible locations)
                         citations = []
@@ -923,13 +931,12 @@ class RiskIntelligenceAgent:
                                 []
                             )
                         
-                        # Check if citations are in the choice metadata
-                        if not citations and "choices" in data and len(data["choices"]) > 0:
-                            choice = data["choices"][0]
+                        # Check if citations are in the choice metadata (already have choice from above)
+                        if not citations:
                             if "citations" in choice:
                                 citations = choice["citations"] if isinstance(choice["citations"], list) else []
                             # Also check message metadata
-                            if "message" in choice and isinstance(choice["message"], dict):
+                            if not citations and "message" in choice and isinstance(choice["message"], dict):
                                 msg = choice["message"]
                                 if "citations" in msg:
                                     citations = msg["citations"] if isinstance(msg["citations"], list) else []
@@ -938,7 +945,7 @@ class RiskIntelligenceAgent:
                         
                         # Check if citations are in response metadata
                         if not citations and "response" in data:
-                            resp = data["response"]
+                            resp = data.get("response")
                             if isinstance(resp, dict):
                                 citations = (
                                     resp.get("citations") or
