@@ -921,15 +921,17 @@ class RiskIntelligenceAgent:
                         if "citations" in data:
                             citations = data["citations"] if isinstance(data["citations"], list) else []
                         
-                        # Check alternative locations
+                        # Check alternative locations (explicitly check each field, accept empty lists as valid)
                         if not citations:
-                            citations = (
-                                data.get("citations_list") or 
-                                data.get("sources") or
-                                data.get("references") or
-                                data.get("source_attributions") or
-                                []
-                            )
+                            # Check each field explicitly - accept empty lists as valid (means "no citations in this field")
+                            if "citations_list" in data and isinstance(data["citations_list"], list):
+                                citations = data["citations_list"]
+                            elif "sources" in data and isinstance(data["sources"], list):
+                                citations = data["sources"]
+                            elif "references" in data and isinstance(data["references"], list):
+                                citations = data["references"]
+                            elif "source_attributions" in data and isinstance(data["source_attributions"], list):
+                                citations = data["source_attributions"]
                         
                         # Check if citations are in the choice metadata (already have choice from above)
                         if not citations:
@@ -943,16 +945,17 @@ class RiskIntelligenceAgent:
                                 if not citations and "source_attributions" in msg:
                                     citations = msg["source_attributions"] if isinstance(msg["source_attributions"], list) else []
                         
-                        # Check if citations are in response metadata
+                        # Check if citations are in response metadata (explicitly check each field, accept empty lists as valid)
                         if not citations and "response" in data:
                             resp = data.get("response")
                             if isinstance(resp, dict):
-                                citations = (
-                                    resp.get("citations") or
-                                    resp.get("sources") or
-                                    resp.get("references") or
-                                    []
-                                )
+                                # Check each field explicitly - accept empty lists as valid
+                                if "citations" in resp and isinstance(resp["citations"], list):
+                                    citations = resp["citations"]
+                                elif "sources" in resp and isinstance(resp["sources"], list):
+                                    citations = resp["sources"]
+                                elif "references" in resp and isinstance(resp["references"], list):
+                                    citations = resp["references"]
                         
                         return content, citations
                     except (KeyError, ValueError) as e:
